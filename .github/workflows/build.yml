@@ -1,0 +1,13 @@
+name: Build VST3
+on: [push, workflow_dispatch]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build
+      - run: cmake --build build --config Release --parallel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AtelierGrain-VST3-Windows
+          path: build/AtelierGrain_artefacts/Release/VST3
