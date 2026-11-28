@@ -41,7 +41,7 @@ static const PD kP[] = {
 
 static const char* kEqT[6] = {"e1T", "e2T", "e3T", "e4T", "e5T", "e6T"};
 static const char* kEqO[6] = {"e1O", "e2O", "e3O", "e4O", "e5O", "e6O"};
-static const char* kX[] = {"l1S", "l2S", "fT", "fSl", "fCar", "nTyp", "sMode", "l1Y", "l2Y", "bY", "pY", "dY", "leg", "tOn", "eOn", "dPP",
+static const char* kX[] = {"l1S", "l2S", "fT", "fSl", "fCar", "nTyp", "sMode", "l1Y", "l2Y", "bY", "pY", "dY", "leg", "tOn", "eOn", "dMode",
   "e1T", "e1O", "e2T", "e2O", "e3T", "e3O", "e4T", "e4O", "e5T", "e5O", "e6T", "e6O"};
 
 #include "Presets.h"
@@ -111,7 +111,7 @@ static APVTS::ParameterLayout layout() {
   L.add(std::make_unique<AudioParameterBool>(ParameterID{"leg", 1}, "Legato", false));
   L.add(std::make_unique<AudioParameterBool>(ParameterID{"tOn", 1}, "Tube active", false));
   L.add(std::make_unique<AudioParameterBool>(ParameterID{"eOn", 1}, "EQ active", true));
-  L.add(std::make_unique<AudioParameterBool>(ParameterID{"dPP", 1}, "Echo ping-pong", false));
+  ch("dMode", "Echo mode", StringArray{"Stereo", "Ping-Pong", "Mono", "Tape", "Dub", "Multi-Tap"}, 0);
   StringArray et{"Bell", "Low Shelf", "High Shelf", "Low Cut 12", "Low Cut 24", "High Cut 12", "High Cut 24", "Notch"};
   const int defT[6] = {4, 1, 0, 0, 0, 2};
   for (int b = 0; b < 6; ++b) { ch(kEqT[b], "EQ B" + String(b + 1) + " type", et, defT[b]);
@@ -201,7 +201,7 @@ public:
     ScopedNoDenormals nd; b.clear(); rebuild(false);
     for (int i = 0; i < K::NP; ++i) q[i] = apvts.getRawParameterValue(kP[i].id)->load();
     auto gi = [&](const char* id) { return (int) apvts.getRawParameterValue(id)->load(); };
-    sh1 = gi("l1S"); sh2 = gi("l2S"); fTy = gi("fT"); fSl = gi("fSl"); fCar = gi("fCar"); nTy = gi("nTyp"); sMd = gi("sMode"); pSy = gi("pY"); dSy = gi("dY"); dPPb = gi("dPP") > 0;
+    sh1 = gi("l1S"); sh2 = gi("l2S"); fTy = gi("fT"); fSl = gi("fSl"); fCar = gi("fCar"); nTy = gi("nTyp"); sMd = gi("sMode"); pSy = gi("pY"); dSy = gi("dY"); dMd = gi("dMode");
     leg = gi("leg") > 0; tOnB = gi("tOn") > 0; eqOn = gi("eOn") > 0;
     double bpm = 120.0, ppq = 0; bool havePpq = false;
     if (auto* ph = getPlayHead()) if (auto info = ph->getPosition()) {
@@ -216,16 +216,74 @@ public:
     render(b, pos, n); master(b);
     int cnt = 0; for (auto& v : vs) cnt += v.on ? 1 : 0; nVoices = cnt; }
 
+  // MAGIC: musically constrained random sound design. kind: 0 any, 1 bass, 2 lead, 3 pluck, 4 pad, 5 kick, 6 perc
+  void magic(int kind) {
+    auto P = [&](const char* id, float v) { if (auto* p = apvts.getParameter(id)) p->setValueNotifyingHost(p->convertTo0to1(v)); };
+    auto U = [&](float a, float b) { return a + (b - a) * rnd.nextFloat(); };
+    auto LG = [&](float a, float b) { return a * std::pow(b / a, rnd.nextFloat()); };
+    auto I = [&](int a, int b) { return (float) (a + rnd.nextInt(b - a + 1)); };
+    auto chance = [&](float pr) { return rnd.nextFloat() < pr; };
+    static const float echoT[3] = {9.f, 10.f, 12.f}, echoM[3] = {0.f, 1.f, 3.f};
+    for (auto* p : getParameters()) p->setValueNotifyingHost(p->getDefaultValue());
+    if (kind <= 0 || kind > 6) kind = 1 + rnd.nextInt(6);
+    static const char* nm[] = {"", "Bass", "Lead", "Pluck", "Pad", "Kick", "Perc"};
+    bool scream = chance(.35f); float res = U(.05f, .25f);
+    auto echo = [&](float mn, float mx) { P("dMix", U(mn, mx)); P("dY", echoT[rnd.nextInt(3)]); P("dFb", U(.35f, .55f)); P("dMode", echoM[rnd.nextInt(3)]); };
+    switch (kind) {
+      case 1:
+        P("aPart", chance(.3f) ? I(1, 3) : I(14, 30)); P("aTilt", U(.2f, .7f)); P("aLvl", U(.75f, .95f)); if (chance(.5f)) { P("aUni", U(.2f, .7f)); P("aDet", U(8.f, 22.f)); }
+        P("cut", LG(250.f, 900.f)); res = U(.1f, .6f); P("fEnv", U(.3f, .9f)); P("fDrv", U(.2f, .6f)); P("fBass", U(.4f, .7f)); P("fCar", scream ? 1.f : 0.f);
+        P("aA", U(.002f, .01f)); P("aD", U(.15f, .4f)); P("aS", U(.5f, .9f)); P("aR", U(.08f, .2f)); P("fD", U(.1f, .3f)); P("fS", U(0.f, .3f));
+        if (chance(.6f)) { P("leg", 1.f); P("gld", U(0.f, .08f)); }
+        P("sDrv", U(.3f, .55f)); P("sMix", U(.2f, .5f)); if (chance(.5f)) { P("tOn", 1.f); P("tDrv", U(.3f, .6f)); P("tMix", U(.3f, .55f)); }
+        if (chance(.6f)) { P("pDep", U(.3f, .7f)); P("pRel", U(.5f, .8f)); }
+        P("e1O", 1.f); P("e1F", U(28.f, 40.f)); break;
+      case 2:
+        P("aPart", I(14, 30)); P("aTilt", U(.3f, .55f)); P("aLvl", U(.7f, .85f)); P("aUni", U(.3f, 1.f)); P("aDet", U(8.f, 24.f));
+        P("cut", LG(1800.f, 5000.f)); res = U(.15f, .55f); P("fEnv", U(.2f, .6f)); P("fKey", U(.3f, .7f)); P("fDrv", U(.2f, .55f)); P("fCar", scream ? 1.f : 0.f);
+        P("aA", U(.003f, .02f)); P("aD", U(.2f, .5f)); P("aS", U(.6f, .9f)); P("aR", U(.2f, .5f)); P("l1R", U(4.5f, 6.f)); P("l1P", U(.02f, .05f));
+        if (chance(.6f)) { P("leg", 1.f); P("gld", U(.02f, .06f)); } P("ana", U(.3f, .7f));
+        if (chance(.5f)) { P("tOn", 1.f); P("tMix", U(.3f, .5f)); } echo(.15f, .35f); P("rMix", U(.15f, .4f)); P("rSize", U(.5f, .8f)); break;
+      case 3:
+        P("aPart", I(6, 20)); P("aTilt", U(.35f, .7f)); if (chance(.4f)) { P("aUni", U(.2f, .5f)); P("aDet", U(8.f, 14.f)); } if (chance(.25f)) P("aSemi", 12.f);
+        P("cut", LG(700.f, 2500.f)); res = U(.15f, .6f); P("fEnv", U(.6f, 1.f)); P("fD", U(.15f, .4f)); P("fS", U(0.f, .1f)); P("fCar", scream ? 1.f : 0.f);
+        P("aA", U(.001f, .004f)); P("aD", U(.2f, .6f)); P("aS", 0.f); P("aR", U(.15f, .5f)); echo(.2f, .4f); P("rMix", U(.2f, .4f)); P("rSize", U(.5f, .8f)); break;
+      case 4:
+        P("aLvl", U(.5f, .7f)); P("aPart", I(6, 14)); P("aTilt", U(.5f, .75f)); P("aUni", U(.4f, .8f)); P("aDet", U(12.f, 28.f));
+        if (chance(.6f)) { P("bLvl", U(.15f, .4f)); P("bSize", U(120.f, 300.f)); P("bDens", U(10.f, 30.f)); P("bSpr", U(.3f, .7f)); }
+        P("cut", LG(900.f, 2500.f)); res = U(.1f, .3f); P("fEnv", U(.15f, .35f)); P("fA", U(.8f, 2.f)); P("fS", U(.5f, .7f));
+        P("aA", U(.8f, 2.4f)); P("aD", U(.8f, 1.5f)); P("aS", U(.7f, .9f)); P("aR", U(1.5f, 3.f)); P("l1R", U(.1f, .4f)); P("l1C", U(.2f, .4f)); P("ana", U(.5f, .8f));
+        P("tOn", 1.f); P("tWarm", U(.4f, .7f)); P("tMix", U(.4f, .55f)); P("rMix", U(.4f, .7f)); P("rSize", U(.7f, .9f)); P("rDamp", U(.4f, .7f)); break;
+      case 5:
+        P("aPart", I(1, 3)); P("aTilt", U(.5f, .9f)); P("aLvl", 1.f); P("pEnv", U(24.f, 36.f)); P("fA", .001f); P("fD", U(.04f, .09f)); P("fS", 0.f);
+        P("aA", .001f); P("aD", U(.3f, .6f)); P("aS", 0.f); P("aR", U(.06f, .12f)); P("nLvl", U(.1f, .25f)); P("nDec", U(.005f, .01f)); P("nTone", U(.3f, .6f));
+        P("cut", 18000.f); P("fEnv", 0.f); P("sDrv", U(.4f, .7f)); P("sMix", U(.4f, .6f)); if (chance(.5f)) { P("tOn", 1.f); P("tMix", U(.3f, .5f)); }
+        P("e1O", 1.f); P("e1F", U(24.f, 32.f)); break;
+      default:
+        if (chance(.6f)) {
+          if (chance(.5f)) { P("aLvl", .12f); P("aPart", 12.f); P("aOdd", 1.f); P("aSemi", 36.f); P("aUni", 1.f); P("aDet", 45.f); } else P("aLvl", 0.f);
+          P("nLvl", U(.8f, 1.f)); P("nTyp", chance(.5f) ? 0.f : (chance(.5f) ? 1.f : 3.f)); P("nTone", U(.3f, .6f)); P("nDec", U(.01f, .12f));
+          P("cut", LG(3000.f, 8000.f)); P("fT", chance(.6f) ? 1.f : 2.f); res = U(.1f, .4f); P("fEnv", 0.f);
+          P("aA", .001f); P("aD", U(.03f, .3f)); P("aS", 0.f); P("aR", U(.03f, .2f)); }
+        else {
+          P("aPart", I(1, 4)); P("aLvl", .9f); P("pEnv", U(8.f, 24.f)); P("fA", .001f); P("fD", U(.03f, .1f)); P("fS", 0.f);
+          P("aA", .001f); P("aD", U(.1f, .5f)); P("aS", 0.f); P("aR", U(.05f, .2f)); P("nLvl", U(0.f, .3f)); P("nDec", .01f);
+          P("cut", LG(2000.f, 9000.f)); P("fEnv", 0.f); echo(.2f, .4f); }
+        break; }
+    if (scream) res = jmin(res, .62f);          // safety: bounded resonance, bounded drive, fixed volume, output gain never boosted
+    P("res", jmin(res, .8f)); P("mst", .7f); P("sOut", 0.f);
+    ++magicCount; apvts.state.setProperty("presetName", String("Magic ") + nm[kind] + " " + String(magicCount).paddedLeft('0', 2), nullptr); }
+
   APVTS apvts; std::atomic<int> nVoices{0}; std::atomic<float> outL{0}, outR{0}, tubeLvl{0};
 private:
   double fs = 44100; int maxB = 512; Voice vs[8]; std::unique_ptr<dsp::Oversampling<float>> os[8], osM;
   std::vector<int> stack; std::vector<float> sIn, sG, sAe, sL1, sL2, dl[2]; float q[K::NP] {};
   int sh1 = 0, sh2 = 0, fTy = 0, fSl = 1, fCar = 0, nTy = 0, sMd = 0, pSy = 6, dSy = 10, cur = 0, dlSize = 1, dw = 0;
-  bool leg = false, tOnB = false, eqOn = true, sOn = false, dPPb = false, eqB[6] {}, eq2[6] {};
+  bool leg = false, tOnB = false, eqOn = true, sOn = false, eqB[6] {}, eq2[6] {};
   float rt1 = 2, rt2 = .5f, dens = 30, cP = -1, cT = -1, cO = -1, lastF = 261.6f, sinT[2048] {}, tabs[8][2048] {}, bpmNow = 120, pumpL = 1, pumpPh = 0, pumpG = 1;
   float sd = 1, sOc = 1, aTone = 1, td = 1, tb = 0, tNorm = 1, aLow = .01f, aHf = .5f, eqSig[30] {}, tubePk = 0, dCur = 12000, dfl[2] {};
   float specBuf[4096] {}; std::atomic<int> specW{0};
-  Fx cf[2]; dsp::IIR::Filter<float> eq[2][6][2]; LFO a1, a2; Random rnd; Reverb rev;
+  Fx cf[2]; dsp::IIR::Filter<float> eq[2][6][2]; LFO a1, a2; Random rnd; Reverb rev; float dph1 = 0, dph2 = 0, dhp[2] {}; int dMd = 0, magicCount = 0;
 
   void rebuild(bool force) {
     float P = apvts.getRawParameterValue("aPart")->load(), T = apvts.getRawParameterValue("aTilt")->load(), O = apvts.getRawParameterValue("aOdd")->load();
@@ -373,20 +431,35 @@ private:
     // parametric EQ (6 bands)
     if (eqOn) for (int c = 0; c < 2; ++c) { float* d = b.getWritePointer(c);
       for (int i = 0; i < n; ++i) { float x = d[i]; for (int bnd = 0; bnd < 6; ++bnd) if (eqB[bnd]) { x = eq[c][bnd][0].processSample(x); if (eq2[bnd]) x = eq[c][bnd][1].processSample(x); } d[i] = x; } }
-    // echo (tempo-synced, optional ping-pong)
+    // echo (tempo-synced) - 6 modes: Stereo, Ping-Pong, Mono, Tape, Dub, Multi-Tap
     float fb = q[K::dFb], mixD = q[K::dMix], aT = 1.f - std::exp(-MathConstants<float>::twoPi * 500.f * std::pow(32.f, q[K::dTone]) / F);
-    float dTgt = jlimit(64.f, (float) dlSize - 4.f, 60.f / jmax(bpmNow, 20.f) * beatsOf(dSy + 1) * F);
+    float aH = 1.f - std::exp(-MathConstants<float>::twoPi * 180.f / F), sm = dMd == 4 ? .0004f : .002f, hiDs = (float) dlSize - 4.f;
+    float dTgt = jlimit(64.f, hiDs - 200.f, 60.f / jmax(bpmNow, 20.f) * beatsOf(dSy + 1) * F);
+    auto rdl = [&](int c, float ds) { float rp = (float) dw - ds; while (rp < 0.f) rp += (float) dlSize; int i0 = (int) rp, i1 = (i0 + 1) % dlSize; float fr = rp - (float) i0;
+      return dl[(size_t) c][(size_t) i0] + (dl[(size_t) c][(size_t) i1] - dl[(size_t) c][(size_t) i0]) * fr; };
     for (int i = 0; i < n; ++i) {
-      dCur += (dTgt - dCur) * .002f; float rp = (float) dw - dCur; if (rp < 0.f) rp += (float) dlSize;
-      int i0 = (int) rp, i1 = (i0 + 1) % dlSize; float fr = rp - (float) i0;
-      float yL = dl[0][(size_t) i0] + (dl[0][(size_t) i1] - dl[0][(size_t) i0]) * fr, yR = dl[1][(size_t) i0] + (dl[1][(size_t) i1] - dl[1][(size_t) i0]) * fr;
-      dfl[0] += aT * ((dPPb ? yR : yL) - dfl[0]); dfl[1] += aT * ((dPPb ? yL : yR) - dfl[1]);
-      dl[0][(size_t) dw] = ft(L[i] + dfl[0] * fb); dl[1][(size_t) dw] = ft(R[i] + dfl[1] * fb);
-      L[i] += yL * mixD; R[i] += yR * mixD; dw = (dw + 1) % dlSize; }
+      dCur += (dTgt - dCur) * sm; float tL = dCur, tR = dCur;
+      if (dMd == 0) tR = dCur * .75f;
+      if (dMd == 3) { dph1 += .55f / F; dph2 += 6.7f / F; if (dph1 > 1.f) dph1 -= 1.f; if (dph2 > 1.f) dph2 -= 1.f;
+        float mod = 40.f * std::sin(6.2831853f * dph1) + 6.f * std::sin(6.2831853f * dph2); tL += mod; tR += mod * .9f; }
+      tL = jlimit(32.f, hiDs, tL); tR = jlimit(32.f, hiDs, tR);
+      float yL = rdl(0, tL), yR = rdl(1, tR), oL = yL, oR = yR, fL = yL, fR = yR;
+      if (dMd == 1) { fL = yR; fR = yL; }
+      else if (dMd == 2) { fL = fR = .5f * (yL + yR); oL = oR = fL; }
+      else if (dMd == 5) { float t1 = rdl(0, jlimit(32.f, hiDs, tL * .75f)), t2 = rdl(1, jlimit(32.f, hiDs, tR * .5f)); oL = .6f * yL + .4f * t1 + .25f * t2; oR = .6f * yR + .4f * t2 + .25f * t1; }
+      dfl[0] += aT * (fL - dfl[0]); dfl[1] += aT * (fR - dfl[1]); float gL = dfl[0], gR = dfl[1];
+      if (dMd == 4) { dhp[0] += aH * (gL - dhp[0]); dhp[1] += aH * (gR - dhp[1]); gL -= dhp[0]; gR -= dhp[1]; }
+      if (dMd == 3 || dMd == 4) { gL = ft(gL * 1.7f) * .6f; gR = ft(gR * 1.7f) * .6f; }
+      float inL = L[i], inR = R[i]; if (dMd == 2) inL = inR = .5f * (inL + inR);
+      dl[0][(size_t) dw] = ft(inL + gL * fb); dl[1][(size_t) dw] = ft(inR + gR * fb);
+      L[i] += oL * mixD; R[i] += oR * mixD; dw = (dw + 1) % dlSize; }
     // reverb
     if (q[K::rMix] > .001f) { Reverb::Parameters rp; rp.roomSize = q[K::rSize]; rp.damping = q[K::rDamp]; rp.wetLevel = q[K::rMix] * .4f; rp.dryLevel = 1.f; rp.width = 1.f; rp.freezeMode = 0.f;
       rev.setParameters(rp); rev.processStereo(L, R, n); }
     b.applyGain(q[K::mst]);
+    for (int c = 0; c < 2; ++c) { float* d = b.getWritePointer(c);
+      for (int i = 0; i < n; ++i) { float x = d[i]; if (!std::isfinite(x)) x = 0.f; float a = std::abs(x);
+        if (a > .85f) { float y = .85f + .15f * std::tanh((a - .85f) / .15f); x = x < 0.f ? -y : y; } d[i] = x; } }
     outL.store(b.getMagnitude(0, 0, n)); outR.store(b.getMagnitude(1, 0, n));
     int w = specW.load(); for (int i = 0; i < n; ++i) specBuf[(w + i) & 4095] = .5f * (L[i] + R[i]); specW.store((w + n) & 4095); }
 };
@@ -417,54 +490,69 @@ static void led(Graphics& g, float cx, float cy, Colour on, bool lit, float r = 
 
 struct Knob : Slider {
   AudioProcessorParameter* par = nullptr;
-  Knob() : Slider(Slider::RotaryHorizontalVerticalDrag, Slider::TextBoxBelow) {}
-  void mouseDoubleClick(const MouseEvent& e) override {   // double-click on the knob = back to the default value
+  explicit Knob(Slider::SliderStyle st = Slider::RotaryHorizontalVerticalDrag, bool big = false) : Slider(st, Slider::TextBoxBelow) { getProperties().set("big", big); }
+  void mouseDoubleClick(const MouseEvent& e) override {   // double-click on the knob / fader = back to the default value
     if (par != nullptr && e.position.y < (float) getHeight() - 18.f) { par->beginChangeGesture(); par->setValueNotifyingHost(par->getDefaultValue()); par->endChangeGesture(); }
     else Slider::mouseDoubleClick(e); } };
 
+static void neon(Graphics& g, const Path& p, Rectangle<float> r, Colour c, bool fill) {
+  if (fill) { Path f(p); f.lineTo(r.getRight(), r.getBottom()); f.lineTo(r.getX(), r.getBottom()); f.closeSubPath();
+    g.setGradientFill(ColourGradient(c.withAlpha(.35f), 0, r.getY(), c.withAlpha(0.f), 0, r.getBottom(), false)); g.fillPath(f); }
+  g.setColour(c.withAlpha(.22f)); g.strokePath(p, PathStrokeType(4.f)); g.setColour(c); g.strokePath(p, PathStrokeType(1.5f)); }
+
 struct Dark : LookAndFeel_V4 {
+  Image knobS, knobL;
   Dark() {
-    setColour(Slider::textBoxTextColourId, Colour(0xffb8c0c8)); setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
-    setColour(Slider::textBoxBackgroundColourId, Colours::transparentBlack); setColour(Label::textColourId, Colour(0xffe9ecef));
+    knobS = ImageCache::getFromMemory(BinaryData::knob_small_png, BinaryData::knob_small_pngSize);
+    knobL = ImageCache::getFromMemory(BinaryData::knob_large_png, BinaryData::knob_large_pngSize);
+    setColour(Slider::textBoxTextColourId, Colour(0xffa9b3bd)); setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
+    setColour(Slider::textBoxBackgroundColourId, Colours::transparentBlack); setColour(Label::textColourId, Colour(0xffdfe4e8));
     setColour(ComboBox::textColourId, Colour(0xffe6e9eb)); setColour(ComboBox::arrowColourId, Colour(0xffe6e9eb));
     setColour(PopupMenu::backgroundColourId, Colour(0xff1f2124)); setColour(PopupMenu::textColourId, Colour(0xffe6e9eb)); setColour(PopupMenu::headerTextColourId, Colour(0xff8fb8d8));
-    setColour(PopupMenu::highlightedBackgroundColourId, Colour(0xff3a8fd8)); setColour(PopupMenu::highlightedTextColourId, Colours::white);
-    setColour(TextButton::buttonColourId, Colour(0xff2a2d31)); setColour(TextButton::buttonOnColourId, Colour(0xff4a4f56));
+    setColour(PopupMenu::highlightedBackgroundColourId, Colour(0xffd9772b)); setColour(PopupMenu::highlightedTextColourId, Colours::white);
+    setColour(TextButton::buttonColourId, Colour(0xff1c2024)); setColour(TextButton::buttonOnColourId, Colour(0xff3a3f45));
     setColour(TextButton::textColourOffId, Colour(0xffe6e9eb)); setColour(TextButton::textColourOnId, Colours::white); }
-  void drawRotarySlider(Graphics& g, int x, int y, int w, int h, float pos, float a0, float a1, Slider& s) override {
-    float d = (float) jmin(w, h) - 20.f, r = d * .5f; Point<float> c((float) x + (float) w * .5f, (float) y + (float) h * .5f);
-    auto acc = s.findColour(Slider::rotarySliderFillColourId);
-    for (int i = 0; i <= 20; ++i) { float t = (float) i / 20.f, an = a0 + t * (a1 - a0);
-      g.setColour(t <= pos + .001f ? acc : Colour(0x44ffffff));
-      g.fillEllipse(c.x + std::sin(an) * (r + 7.f) - 1.4f, c.y - std::cos(an) * (r + 7.f) - 1.4f, 2.8f, 2.8f); }
-    for (int i = 6; i >= 1; --i) { float e = (float) i * 1.4f; g.setColour(Colours::black.withAlpha(.11f)); g.fillEllipse(c.x - r - e, c.y - r + 4.f - e * .5f, d + 2 * e, d + 2 * e); }
-    g.setGradientFill(ColourGradient(Colour(0xff4c4e52), c.x, c.y - r, Colour(0xff060607), c.x, c.y + r, false)); g.fillEllipse(c.x - r, c.y - r, d, d);
-    for (int i = 0; i < 64; ++i) { float an = (float) i * MathConstants<float>::twoPi / 64.f; Point<float> u(std::sin(an), -std::cos(an));
-      float lit = jmax(0.f, .5f + .5f * (-u.y * .8f - u.x * .2f));
-      g.setColour(Colours::white.withAlpha(.04f + .24f * lit * (i % 2 == 0 ? 1.f : .35f)));
-      g.drawLine(c.x + u.x * r * .84f, c.y + u.y * r * .84f, c.x + u.x * (r - .5f), c.y + u.y * (r - .5f), 1.f); }
-    Path rim; rim.addCentredArc(c.x, c.y, r - .8f, r - .8f, 0.f, -1.1f, 1.1f, true);
-    g.setColour(Colours::white.withAlpha(.35f)); g.strokePath(rim, PathStrokeType(1.4f));
-    g.setColour(Colours::black); g.drawEllipse(c.x - r, c.y - r, d, d, 1.3f);
-    float cr = r * .66f;
-    g.setColour(Colours::black.withAlpha(.55f)); g.fillEllipse(c.x - cr - 1, c.y - cr, cr * 2 + 2, cr * 2 + 2);
-    g.setGradientFill(ColourGradient(Colour(0xfff1f2f3), c.x - cr * .7f, c.y - cr * .9f, Colour(0xff8c9095), c.x + cr * .7f, c.y + cr * .9f, false));
-    g.fillEllipse(c.x - cr, c.y - cr, cr * 2, cr * 2);
-    { Graphics::ScopedSaveState ss(g); Path clip; clip.addEllipse(c.x - cr, c.y - cr, cr * 2, cr * 2); g.reduceClipRegion(clip);
-      for (float rr = 1.f; rr < cr; rr += 1.15f) { g.setColour(((int) (rr * 10.f)) % 3 == 0 ? Colours::white.withAlpha(.10f) : Colours::black.withAlpha(.06f));
-        g.drawEllipse(c.x - rr, c.y - rr, rr * 2, rr * 2, .6f); }
-      for (int k = 0; k < 2; ++k) { Path wdg; float a = k ? 3.4f : .3f; wdg.addPieSegment(c.x - cr, c.y - cr, cr * 2, cr * 2, a, a + .55f, 0.f);
-        g.setColour(Colours::white.withAlpha(.16f)); g.fillPath(wdg); } }
-    g.setColour(Colour(0xff111214)); g.drawEllipse(c.x - cr, c.y - cr, cr * 2, cr * 2, 1.2f);
-    auto t = AffineTransform::rotation(a0 + pos * (a1 - a0)).translated(c);
-    Path groove; groove.addRoundedRectangle(-2.8f, -cr + 1.5f, 5.6f, cr * .55f + 2.f, 2.3f);
-    Path mark; mark.addRoundedRectangle(-1.7f, -cr + 2.5f, 3.4f, cr * .55f, 1.5f);
-    g.setColour(Colours::black.withAlpha(.6f)); g.fillPath(groove, t); g.setColour(Colours::white); g.fillPath(mark, t); }
+  int getSliderThumbRadius(Slider&) override { return 12; }
+
+  // rotary knobs: the two supplied film strips (100 frames each, 100x100 and 119x119)
+  void drawRotarySlider(Graphics& g, int x, int y, int w, int h, float pos, float, float, Slider& s) override {
+    bool big = (bool) s.getProperties().getWithDefault("big", false); const Image& img = big ? knobL : knobS; int fr = big ? 119 : 100;
+    if (!img.isValid()) return;
+    int n = img.getHeight() / fr, idx = jlimit(0, n - 1, (int) std::round(pos * (float) (n - 1))); float d = big ? 80.f : 62.f, cx = (float) x + (float) w * .5f, cy = (float) y + (float) h * .5f;
+    for (int i = 5; i >= 1; --i) { float e = (float) i * 1.5f; g.setColour(Colours::black.withAlpha(.08f)); g.fillEllipse(cx - d * .32f - e, cy - d * .32f + 5.f - e * .3f, d * .64f + 2 * e, d * .64f + 2 * e); }   // soft drop shadow (+5 px)
+    g.setImageResamplingQuality(Graphics::highResamplingQuality);
+    g.drawImage(img, (int) (cx - d * .5f), (int) (cy - d * .5f), (int) d, (int) d, 0, idx * fr, fr, fr); }
+
+  // vertical fader: recessed black slot, white graduations on both sides, matte black cap with a glowing orange line
+  void drawLinearSlider(Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos, Slider::SliderStyle, Slider&) override {
+    float cx = (float) x + (float) w * .5f, top = maxPos, bot = minPos; (void) h; (void) y;
+    for (int i = 0; i <= 10; ++i) { float yy = top + (bot - top) * (float) i / 10.f, len = (i % 5 == 0) ? 10.f : 5.f;
+      g.setColour(Colour(i % 5 == 0 ? 0xccffffff : 0x88ffffff)); g.drawHorizontalLine((int) yy, cx - 22.f, cx - 22.f + len); g.drawHorizontalLine((int) yy, cx + 22.f - len, cx + 22.f); }
+    Rectangle<float> slot(cx - 4.f, top - 6.f, 8.f, bot - top + 12.f);
+    g.setColour(Colours::black); g.fillRoundedRectangle(slot, 4.f);
+    g.setGradientFill(ColourGradient(Colour(0xff000000), slot.getX(), 0, Colour(0xff15181b), slot.getRight(), 0, false)); g.fillRoundedRectangle(slot.reduced(1.f), 3.f);
+    g.setColour(Colour(0x30ffffff)); g.drawRoundedRectangle(slot.expanded(.5f), 4.f, 1.f);
+    g.setColour(Colour(0xffff8a2a).withAlpha(.5f)); g.fillRect(cx - 1.2f, pos, 2.4f, bot - pos + 4.f);
+    float cw = 30.f, ch = 24.f; Rectangle<float> cap(cx - cw * .5f, pos - ch * .5f, cw, ch);
+    for (int i = 4; i >= 1; --i) { g.setColour(Colours::black.withAlpha(.12f)); g.fillRoundedRectangle(cap.translated(0.f, 4.f).expanded((float) i), 5.f); }   // shadow cast downwards
+    g.setGradientFill(ColourGradient(Colour(0xff34373c), 0, cap.getY(), Colour(0xff0b0c0e), 0, cap.getBottom(), false)); g.fillRoundedRectangle(cap, 3.5f);
+    g.setColour(Colour(0x40ffffff)); g.drawHorizontalLine((int) cap.getY() + 1, cap.getX() + 3.f, cap.getRight() - 3.f);
+    g.setColour(Colour(0xff000000)); g.drawRoundedRectangle(cap, 3.5f, 1.2f);
+    float my = cap.getCentreY(); g.setColour(Colour(0xffff8a2a).withAlpha(.28f)); g.fillRect(cap.getX() + 3.f, my - 3.f, cap.getWidth() - 6.f, 6.f);
+    g.setColour(Colour(0xffff8a2a)); g.fillRect(cap.getX() + 4.f, my - 1.f, cap.getWidth() - 8.f, 2.f); g.setColour(Colour(0xffffd9a8)); g.fillRect(cap.getX() + 8.f, my - .5f, cap.getWidth() - 16.f, 1.f); }
+
+  // value boxes under the knobs: no frame, very dark discreet background, crisp monospaced text
+  void drawLabel(Graphics& g, Label& l) override {
+    if (dynamic_cast<Slider*>(l.getParentComponent()) != nullptr && !l.isBeingEdited()) {
+      auto b = l.getLocalBounds().toFloat().reduced(5.f, 2.f); g.setColour(Colour(0xff121417)); g.fillRoundedRectangle(b, 3.f);
+      g.setColour(Colour(0xffa9b3bd)); g.setFont(Font(FontOptions(Font::getDefaultMonospacedFontName(), 12.f, Font::plain))); g.drawText(l.getText(), l.getLocalBounds(), Justification::centred, false); }
+    else LookAndFeel_V4::drawLabel(g, l); }
+
   void drawComboBox(Graphics& g, int w, int h, bool, int, int, int, int, ComboBox&) override {
     Rectangle<float> b(0.f, 0.f, (float) w, (float) h);
-    g.setGradientFill(ColourGradient(Colour(0xff111214), 0, 0, Colour(0xff2c2f33), 0, (float) h, false)); g.fillRoundedRectangle(b, 4.f);
+    g.setGradientFill(ColourGradient(Colour(0xff0d0f11), 0, 0, Colour(0xff25282c), 0, (float) h, false)); g.fillRoundedRectangle(b, 4.f);
     g.setColour(Colour(0xff000000)); g.drawRoundedRectangle(b.reduced(.5f), 4.f, 1.f);
-    g.setColour(Colour(0x30ffffff)); g.drawHorizontalLine(h - 1, 4.f, (float) w - 4.f);
+    g.setColour(Colour(0x28ffffff)); g.drawHorizontalLine(h - 1, 4.f, (float) w - 4.f);
     Path p; p.addTriangle((float) w - 15.f, (float) h * .42f, (float) w - 7.f, (float) h * .42f, (float) w - 11.f, (float) h * .62f);
     g.setColour(Colour(0xffd5d9dc)); g.fillPath(p); }
   void positionComboBoxText(ComboBox& b, Label& l) override { l.setBounds(6, 1, b.getWidth() - 22, b.getHeight() - 2); l.setFont(getComboBoxFont(b)); }
@@ -477,7 +565,7 @@ class ScreenView : public Component, private Timer {
   Proc& pr; const std::atomic<int>& last; const std::vector<const char*>& ids; Image grid;
   float P(const char* id) const { return pr.apvts.getRawParameterValue(id)->load(); }
   void frame(Graphics& g, Rectangle<float> r, const String& cap) {
-    g.setColour(Colour(0xff040e12)); g.fillRoundedRectangle(r, 3.f); g.setColour(Colour(0xff17414f));
+    g.setColour(Colour(0xff0B0F14)); g.fillRoundedRectangle(r, 3.f); g.setColour(Colour(0xff17242f));
     for (int i = 1; i < 4; ++i) g.drawHorizontalLine((int) (r.getY() + r.getHeight() * (float) i / 4.f), r.getX(), r.getRight());
     g.drawRoundedRectangle(r, 3.f, 1.f); g.setColour(Colour(0xff6fb4c8)); g.setFont(10.f);
     g.drawText(cap, (int) r.getX(), (int) r.getBottom() + 2, (int) r.getWidth(), 12, Justification::centred); }
@@ -494,9 +582,9 @@ public:
     g.setColour(Colour(0x66ffffff)); g.drawRoundedRectangle(b.reduced(.5f), 9.f, 1.f);
     auto in = b.reduced(6.f); Path glassPath; glassPath.addRoundedRectangle(in, 5.f);
     g.setColour(Colours::black); g.fillPath(glassPath);
-    g.setGradientFill(ColourGradient(Colour(0xff07181e), 0, in.getY(), Colour(0xff020708), 0, in.getBottom(), false)); g.fillPath(glassPath);
+    g.setGradientFill(ColourGradient(Colour(0xff0B0F14), 0, in.getY(), Colour(0xff06080b), 0, in.getBottom(), false)); g.fillPath(glassPath);
     { Graphics::ScopedSaveState ss(g); g.reduceClipRegion(glassPath);
-      Colour amber(0xffffb347), cyan(0xff58d6ff);
+      Colour amber(0xfff2f6fa), cyan(0xff00d4ff);
       g.setColour(Colour(0xff6fb4c8)); g.setFont(11.f); g.drawText("PRESET", 18, 12, 200, 14, Justification::left);
       g.setColour(amber); g.setFont(21.f); g.drawText(pr.currentName(), 18, 26, 205, 26, Justification::left, true);
       int li = last.load();
@@ -507,7 +595,7 @@ public:
       { auto r = Rectangle<float>(236.f, top, w, hh); frame(g, r, "OSC A");
         float t[96]; makeCycle(t, 96, P("aPart"), P("aTilt"), P("aOdd")); Path p;
         for (int i = 0; i < 96; ++i) { float x = r.getX() + r.getWidth() * (float) i / 95.f, y = r.getCentreY() - t[i] * r.getHeight() * .42f; if (i) p.lineTo(x, y); else p.startNewSubPath(x, y); }
-        g.setColour(cyan); g.strokePath(p, PathStrokeType(1.6f)); }
+        neon(g, p, r, cyan, false); }
       { auto r = Rectangle<float>(348.f, top, w, hh); frame(g, r, "FILTER");
         float cut = P("cut"), res = P("res"), R1 = .7f - .64f * res; int ty = (int) P("fT"), sl = (int) P("fSl"); Path p;
         for (int i = 0; i < 96; ++i) { float f = 20.f * std::pow(1000.f, (float) i / 95.f), rr = f / cut;
@@ -517,15 +605,14 @@ public:
           float db = jlimit(-48.f, 24.f, 20.f * std::log10(jmax(m, 1e-4f)));
           float x = r.getX() + r.getWidth() * (float) i / 95.f, y = jmap(db, -48.f, 24.f, r.getBottom() - 2.f, r.getY() + 2.f);
           if (i) p.lineTo(x, y); else p.startNewSubPath(x, y); }
-        g.setColour(amber); g.strokePath(p, PathStrokeType(1.6f)); }
+        neon(g, p, r, Colour(0xff3b82f6), true); }
       { auto r = Rectangle<float>(460.f, top, w, hh); frame(g, r, "AMP ENV");
         float A = P("aA"), D = P("aD"), S = P("aS"), Rl = P("aR");
         float wa = std::pow(A, .35f), wd = std::pow(D, .35f), wr = std::pow(Rl, .35f), ws = .6f * (wa + wd + wr) / 3.f, tot = wa + wd + ws + wr, k = r.getWidth() / tot;
         float yb = r.getBottom() - 3.f, yt = r.getY() + 3.f, ys = jmap(S, 0.f, 1.f, yb, yt); Path p;
         p.startNewSubPath(r.getX(), yb); p.lineTo(r.getX() + wa * k, yt); p.lineTo(r.getX() + (wa + wd) * k, ys);
         p.lineTo(r.getX() + (wa + wd + ws) * k, ys); p.lineTo(r.getRight(), yb);
-        g.setColour(Colour(0xff7dff9b)); g.strokePath(p, PathStrokeType(1.6f)); }
-      g.drawImageAt(grid, 0, 0);
+        neon(g, p, r, Colour(0xff00d4ff), true); }
       g.setGradientFill(ColourGradient(Colour(0x2cffffff), in.getX(), in.getY(), Colour(0x00ffffff), in.getX() + in.getWidth() * .55f, in.getBottom(), false));
       Path refl; refl.startNewSubPath(in.getX(), in.getY()); refl.lineTo(in.getX() + in.getWidth() * .72f, in.getY());
       refl.lineTo(in.getX() + in.getWidth() * .30f, in.getBottom()); refl.lineTo(in.getX(), in.getBottom()); refl.closeSubPath(); g.fillPath(refl);
@@ -562,7 +649,7 @@ public:
     repaint(); }
   void paint(Graphics& g) override {
     auto b = getLocalBounds().toFloat(); float w = b.getWidth(), h = b.getHeight(); double sr = jmax(8000.0, pr.getSampleRate());
-    g.setGradientFill(ColourGradient(Colour(0xff0a1a20), 0, 0, Colour(0xff03090c), 0, h, false)); g.fillRoundedRectangle(b, 6.f);
+    g.setGradientFill(ColourGradient(Colour(0xff0B0F14), 0, 0, Colour(0xff070a0e), 0, h, false)); g.fillRoundedRectangle(b, 6.f);
     g.setColour(Colour(0xff17414f)); g.setFont(10.f);
     for (float fr : {50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f, 10000.f}) { g.drawVerticalLine((int) f2x(fr), 0.f, h); g.setColour(Colour(0xff4d8ea3)); g.drawText(fr >= 1000.f ? String((int) (fr / 1000.f)) + "k" : String((int) fr), (int) f2x(fr) + 2, (int) h - 13, 30, 12, Justification::left); g.setColour(Colour(0xff17414f)); }
     for (float db : {-12.f, -6.f, 0.f, 6.f, 12.f}) { g.setColour(db == 0.f ? Colour(0xff2b6477) : Colour(0xff17414f)); g.drawHorizontalLine((int) g2y(db), 0.f, w); g.setColour(Colour(0xff4d8ea3)); g.drawText(String((int) db), 3, (int) g2y(db) - 12, 28, 12, Justification::left); }
@@ -651,25 +738,36 @@ public:
 
 struct SaveCb : ModalComponentManager::Callback { std::function<void(int)> f; void modalStateFinished(int r) override { if (f) f(r); } };
 
+struct EchoPre { const char* n; std::vector<std::pair<const char*, float>> v; };
+static const std::vector<EchoPre> kEchoPre = {
+  {"Off", {{"dMix", 0.f}}},
+  {"Techno Dotted", {{"dMode", 1.f}, {"dY", 10.f}, {"dFb", .45f}, {"dTone", .55f}, {"dMix", .28f}}},
+  {"Ping-Pong 1/16", {{"dMode", 1.f}, {"dY", 12.f}, {"dFb", .5f}, {"dTone", .6f}, {"dMix", .3f}}},
+  {"Wide Stereo 1/4", {{"dMode", 0.f}, {"dY", 6.f}, {"dFb", .4f}, {"dTone", .5f}, {"dMix", .3f}}},
+  {"Tape Slap", {{"dMode", 3.f}, {"dY", 12.f}, {"dFb", .3f}, {"dTone", .4f}, {"dMix", .35f}}},
+  {"Tape Echo 1/8", {{"dMode", 3.f}, {"dY", 9.f}, {"dFb", .55f}, {"dTone", .35f}, {"dMix", .3f}}},
+  {"Dub Space", {{"dMode", 4.f}, {"dY", 7.f}, {"dFb", .75f}, {"dTone", .45f}, {"dMix", .35f}}},
+  {"Multi-Tap Rhythm", {{"dMode", 5.f}, {"dY", 6.f}, {"dFb", .35f}, {"dTone", .6f}, {"dMix", .35f}}},
+  {"Mono Slap", {{"dMode", 2.f}, {"dY", 12.f}, {"dFb", .15f}, {"dTone", .5f}, {"dMix", .25f}}},
+  {"Long Ambient", {{"dMode", 0.f}, {"dY", 4.f}, {"dFb", .6f}, {"dTone", .35f}, {"dMix", .4f}}}};
+
 class Panel : public Component, private APVTS::Listener, private Timer {
   struct Cell { Label l; std::unique_ptr<Knob> s; std::unique_ptr<ComboBox> c; std::unique_ptr<ToggleButton> t;
     std::unique_ptr<APVTS::SliderAttachment> sa; std::unique_ptr<APVTS::ComboBoxAttachment> ca; std::unique_ptr<APVTS::ButtonAttachment> ta;
     Component* main() { if (s) return s.get(); if (c) return c.get(); return t.get(); } };
   struct Sec { String title; Rectangle<int> area; int extraW = 0; std::vector<std::unique_ptr<Cell>> cells; };
   struct Entry { String name, cat; int factory; File file; };
-  static constexpr int CW = 78, CH = 112, CHEEK = 26;
-  static constexpr int EQW = 940, EQH = 230;
+  static constexpr int CW = 78, CH = 118, MX = 14, TB = 36, BB = 36, EQW = 940, EQH = 230;
 public:
-  static constexpr int W = 1600, H = 1212;
+  static constexpr int W = 1600, H = 1310;
 private:
-  Proc& pr; Dark lf; std::vector<std::unique_ptr<Sec>> secs; std::vector<Entry> entries; ComboBox pre; TextButton prev{"<"}, next{">"}, save{"Save"};
+  Proc& pr; Dark lf; std::vector<std::unique_ptr<Sec>> secs; std::vector<Entry> entries; ComboBox pre, magicType; TextButton prev{"<"}, next{">"}, save{"Save"}, magicBtn{"MAGIC"};
   std::vector<const char*> ids; std::atomic<int> last{-1}; std::unique_ptr<ScreenView> screen; std::unique_ptr<EqDisplay> eqd; std::unique_ptr<TubeView> tube; std::unique_ptr<MeterView> meter;
-  Image bg, logo; bool voiceLit = false;
-  // EQ band panel
+  Image bg, logo, chassisImg, woodT, woodB; bool voiceLit = false;
   int selBand = 0; TextButton bandBtn[6]; Knob kF, kG, kQ; Label lF, lG, lQ; ComboBox bType; ToggleButton bOn{"Band on"}, eqAct{"EQ active"};
   std::unique_ptr<APVTS::SliderAttachment> aF, aG, aQ; std::unique_ptr<APVTS::ComboBoxAttachment> aT; std::unique_ptr<APVTS::ButtonAttachment> aO, aA;
 
-  void timerCallback() override { bool l = pr.nVoices.load() > 0; if (l != voiceLit) { voiceLit = l; repaint(180, 84, 160, 30); } }
+  void timerCallback() override { bool l = pr.nVoices.load() > 0; if (l != voiceLit) { voiceLit = l; repaint(180, 84 + TB, 160, 30); } }
   void parameterChanged(const String& id, float) override { for (size_t i = 0; i < ids.size(); ++i) if (id == ids[i]) { last = (int) i; break; } }
   Sec& sec(const String& t) {
     for (auto& s : secs) if (s->title == t) return *s;
@@ -683,14 +781,14 @@ private:
     else { c.c = std::make_unique<ComboBox>(); if (auto* pc = dynamic_cast<AudioParameterChoice*>(pr.apvts.getParameter(id))) c.c->addItemList(pc->choices, 1);
       c.ca = std::make_unique<APVTS::ComboBoxAttachment>(pr.apvts, id, *c.c); addAndMakeVisible(*c.c); } }
   void selectBand(int b) {
-    selBand = jlimit(0, 5, b); auto col = bandCol(selBand); kF.setColour(Slider::rotarySliderFillColourId, col); kG.setColour(Slider::rotarySliderFillColourId, col); kQ.setColour(Slider::rotarySliderFillColourId, col);
+    selBand = jlimit(0, 5, b); auto col = bandCol(selBand);
     static const char* F[6] = {"e1F", "e2F", "e3F", "e4F", "e5F", "e6F"}; static const char* G[6] = {"e1G", "e2G", "e3G", "e4G", "e5G", "e6G"}; static const char* Q[6] = {"e1Q", "e2Q", "e3Q", "e4Q", "e5Q", "e6Q"};
     aF.reset(); aG.reset(); aQ.reset(); aT.reset(); aO.reset();
     kF.par = pr.apvts.getParameter(F[selBand]); kG.par = pr.apvts.getParameter(G[selBand]); kQ.par = pr.apvts.getParameter(Q[selBand]);
     aF = std::make_unique<APVTS::SliderAttachment>(pr.apvts, F[selBand], kF); aG = std::make_unique<APVTS::SliderAttachment>(pr.apvts, G[selBand], kG); aQ = std::make_unique<APVTS::SliderAttachment>(pr.apvts, Q[selBand], kQ);
     aT = std::make_unique<APVTS::ComboBoxAttachment>(pr.apvts, kEqT[selBand], bType); aO = std::make_unique<APVTS::ButtonAttachment>(pr.apvts, kEqO[selBand], bOn);
-    for (int i = 0; i < 6; ++i) bandBtn[i].setToggleState(i == selBand, dontSendNotification);
-    if (eqd) eqd->setSelected(selBand); repaint(); }
+    for (int i = 0; i < 6; ++i) { bandBtn[i].setToggleState(i == selBand, dontSendNotification); bandBtn[i].setColour(TextButton::buttonColourId, i == selBand ? bandCol(i).withAlpha(.55f) : Colour(0xff1c2024)); }
+    (void) col; if (eqd) eqd->setSelected(selBand); repaint(); }
   void refreshPresets() {
     entries.clear(); pre.clear(dontSendNotification);
     for (int i = 0; i < pr.getNumPrograms(); ++i) entries.push_back({pr.getProgramName(i), pr.getProgramCategory(i), i, File()});
@@ -698,55 +796,52 @@ private:
     std::sort(files.begin(), files.end(), [](const File& a, const File& b) { return a.getFileName() < b.getFileName(); });
     for (auto& f : files) entries.push_back({f.getFileNameWithoutExtension(), "USER", -1, f});
     String lastCat; for (size_t i = 0; i < entries.size(); ++i) { if (entries[i].cat != lastCat) { lastCat = entries[i].cat; if (i > 0) pre.addSeparator(); pre.addSectionHeading(lastCat); } pre.addItem(entries[i].name, (int) i + 1); }
-    auto cur = pr.currentName(); for (size_t i = 0; i < entries.size(); ++i) if (entries[i].name == cur) pre.setSelectedId((int) i + 1, dontSendNotification); }
+    auto cur = pr.currentName(); bool found = false;
+    for (size_t i = 0; i < entries.size(); ++i) if (entries[i].name == cur) { pre.setSelectedId((int) i + 1, dontSendNotification); found = true; }
+    if (!found) { pre.setSelectedId(0, dontSendNotification); pre.setText(cur, dontSendNotification); } }
 
-  void wood(Graphics& g, int x0, int h, int seed) {
-    Rectangle<float> a((float) x0, 0.f, (float) CHEEK, (float) h);
-    ColourGradient gr(Colour(0xff3a1c0c), a.getX(), 0, Colour(0xff3a1c0c), a.getRight(), 0, false);
-    gr.addColour(.35, Colour(0xff94562c)); gr.addColour(.7, Colour(0xff6e3d1d)); g.setGradientFill(gr); g.fillRect(a);
-    Random r(seed);
-    for (int i = 0; i < 300; ++i) { float x = a.getX() + r.nextFloat() * a.getWidth(), ph = r.nextFloat() * 6.28f, amp = .4f + r.nextFloat() * 1.6f, fq = .004f + r.nextFloat() * .01f; Path p;
-      for (int y = 0; y <= h; y += 16) { float xx = x + std::sin((float) y * fq + ph) * amp; if (y) p.lineTo(xx, (float) y); else p.startNewSubPath(xx, 0.f); }
-      g.setColour((r.nextBool() ? Colour(0xff1d0d04) : Colour(0xffc88a55)).withAlpha(.05f + r.nextFloat() * .2f)); g.strokePath(p, PathStrokeType(.5f + r.nextFloat() * 1.1f)); }
-    for (int i = 0; i < 500; ++i) { g.setColour(Colour(0xff1d0d04).withAlpha(r.nextFloat() * .3f)); g.fillRect(a.getX() + r.nextFloat() * a.getWidth(), r.nextFloat() * (float) h, 1.f, 3.f + r.nextFloat() * 8.f); }
-    g.setGradientFill(ColourGradient(Colour(0x40ffffff), a.getX(), 0, Colour(0x00ffffff), a.getX() + a.getWidth() * .55f, 0, false)); g.fillRect(a);
-    g.setGradientFill(ColourGradient(Colour(0x30ffffff), 0, 0, Colour(0x00ffffff), 0, (float) h * .5f, false)); g.fillRect(a);
-    g.setColour(Colour(0xcc000000)); g.drawVerticalLine(x0 == 0 ? CHEEK - 1 : x0, 0.f, (float) h); }
   void background(Graphics& g, int w, int h) {
-    g.setGradientFill(ColourGradient(Colour(0xff414549), 0, 0, Colour(0xff1f2124), 0, (float) h, false)); g.fillAll();
-    Random r(5); int cw = w - 2 * CHEEK;
-    for (int y = 0; y < h; ++y) { g.setColour((r.nextBool() ? Colours::white : Colours::black).withAlpha(r.nextFloat() * .06f)); g.drawHorizontalLine(y, (float) CHEEK, (float) (w - CHEEK)); }
-    for (int i = 0; i < 2000; ++i) { int y = r.nextInt(h), x = CHEEK + r.nextInt(cw), len = 40 + r.nextInt(300); g.setColour(Colours::white.withAlpha(r.nextFloat() * .05f)); g.drawHorizontalLine(y, (float) x, (float) (x + len)); }
-    for (int i = 0; i < 60000; ++i) { g.setColour((r.nextBool() ? Colours::white : Colours::black).withAlpha(r.nextFloat() * .05f)); g.fillRect(CHEEK + r.nextInt(cw), r.nextInt(h), 1, 1); }
-    g.setGradientFill(ColourGradient(Colour(0x22ffffff), 0, 0, Colour(0x00ffffff), 0, (float) h * .35f, false)); g.fillRect(CHEEK, 0, cw, h);
-    Rectangle<float> hp((float) CHEEK + 10.f, 8.f, (float) cw - 20.f, 120.f);
-    g.setColour(Colour(0x22000000)); g.fillRoundedRectangle(hp, 8.f);
-    g.setColour(Colour(0x66ffffff)); g.drawRoundedRectangle(hp.translated(0.f, .9f), 8.f, 1.f);
-    g.setColour(Colour(0xaa000000)); g.drawRoundedRectangle(hp, 8.f, 1.2f);
-    for (int i = 0; i < 22; ++i) { float a = .42f * std::pow(1.f - (float) i / 22.f, 2.f); g.setColour(Colours::black.withAlpha(a));
-      g.drawVerticalLine(CHEEK + i, 0.f, (float) h); g.drawVerticalLine(w - CHEEK - 1 - i, 0.f, (float) h); }
-    wood(g, 0, h, 11); wood(g, w - CHEEK, h, 29);
-    float sr = 6.f; screw(g, (float) CHEEK + 24.f, 22.f, sr, .3f); screw(g, (float) CHEEK + 24.f, 114.f, sr, 1.1f);
-    screw(g, (float) (w - CHEEK) - 24.f, 22.f, sr, .8f); screw(g, (float) (w - CHEEK) - 24.f, 114.f, sr, 2.f);
-    screw(g, (float) CHEEK + 24.f, (float) h - 16.f, sr, 1.5f); screw(g, (float) (w - CHEEK) - 24.f, (float) h - 16.f, sr, .1f); }
+    g.setImageResamplingQuality(Graphics::highResamplingQuality);
+    g.drawImage(chassisImg, 0, 0, w, h, 0, 0, chassisImg.getWidth(), chassisImg.getHeight());          // brushed metal photo
+    g.setColour(Colour(0xff16191D).withAlpha(.7f)); g.fillAll();                                         // dark filter -> matte anthracite
+    Random r(5);
+    for (int i = 0; i < 90000; ++i) { g.setColour((r.nextBool() ? Colours::white : Colours::black).withAlpha(r.nextFloat() * .04f)); g.fillRect(r.nextInt(w), r.nextInt(h), 1, 1); }   // powder-coat grain
+    g.setGradientFill(ColourGradient(Colour(0x14ffffff), 0, (float) TB, Colour(0x00ffffff), 0, (float) TB + 420.f, false)); g.fillRect(0, TB, w, 420);
+    for (int i = 0; i < 28; ++i) { float a = .55f * std::pow(1.f - (float) i / 28.f, 2.f); g.setColour(Colours::black.withAlpha(a));   // shadow cast by the wood bars (inset look)
+      g.fillRect(0, TB + i, w, 1); g.fillRect(0, h - BB - 1 - i, w, 1); }
+    g.drawImage(woodT, 0, 0, w, TB, 0, 0, woodT.getWidth(), woodT.getHeight()); g.drawImage(woodB, 0, h - BB, w, BB, 0, 0, woodB.getWidth(), woodB.getHeight());
+    for (int bar = 0; bar < 2; ++bar) { int y0 = bar ? h - BB : 0;                                       // satin varnish + rounded edge
+      g.setGradientFill(ColourGradient(Colour(0x46ffffff), 0, (float) y0, Colour(0x00ffffff), 0, (float) y0 + BB * .55f, false)); g.fillRect(0, y0, w, BB);
+      g.setGradientFill(ColourGradient(Colour(0x00000000), 0, (float) y0 + BB * .45f, Colour(0x70000000), 0, (float) y0 + BB, false)); g.fillRect(0, y0, w, BB); }
+    g.setColour(Colour(0xff000000)); g.drawHorizontalLine(TB - 1, 0.f, (float) w); g.drawHorizontalLine(h - BB, 0.f, (float) w);
+    float sr = 6.f; screw(g, 24.f, (float) TB + 22.f, sr, .3f); screw(g, (float) w - 24.f, (float) TB + 22.f, sr, .8f);
+    screw(g, 24.f, (float) h - BB - 22.f, sr, 1.5f); screw(g, (float) w - 24.f, (float) h - BB - 22.f, sr, .1f); }
 public:
   Panel(Proc& p) : pr(p) {
     setLookAndFeel(&lf);
     logo = ImageCache::getFromMemory(BinaryData::logo_png, BinaryData::logo_pngSize);
+    chassisImg = ImageCache::getFromMemory(BinaryData::chassis_jpg, BinaryData::chassis_jpgSize);
+    woodT = ImageCache::getFromMemory(BinaryData::wood_top_jpg, BinaryData::wood_top_jpgSize); woodB = ImageCache::getFromMemory(BinaryData::wood_bottom_jpg, BinaryData::wood_bottom_jpgSize);
     for (auto& d : kP) ids.push_back(d.id);
     for (auto* x : kX) ids.push_back(x);
     for (auto& d : kP) {
-      if (String(d.grp) == "EQ") continue;
+      String grp(d.grp), id(d.id); if (grp == "EQ") continue;
+      bool fader = (grp == "AMP ENV" || grp == "FILTER ENV") && id != "pEnv"; bool big = id == "cut" || id == "res" || id == "mst";
       auto& c = cell(sec(d.grp), d.name);
-      c.s = std::make_unique<Knob>(); c.s->par = pr.apvts.getParameter(d.id);
-      c.s->setRotaryParameters(MathConstants<float>::pi * 1.2f, MathConstants<float>::pi * 2.8f, true);
-      c.s->setTextBoxStyle(Slider::TextBoxBelow, false, CW - 6, 16); c.s->setColour(Slider::rotarySliderFillColourId, secColor(d.grp));
+      c.s = std::make_unique<Knob>(fader ? Slider::LinearVertical : Slider::RotaryHorizontalVerticalDrag, big); c.s->par = pr.apvts.getParameter(d.id);
+      if (!fader) c.s->setRotaryParameters(MathConstants<float>::pi * 1.2f, MathConstants<float>::pi * 2.8f, true);
+      c.s->setTextBoxStyle(Slider::TextBoxBelow, false, CW - 6, 16);
       c.sa = std::make_unique<APVTS::SliderAttachment>(pr.apvts, d.id, *c.s); addAndMakeVisible(*c.s); }
     extra("OSC B (GRANULAR)", "bY", "Sync", nullptr); extra("NOISE", "nTyp", "Type", nullptr);
     extra("FILTER", "fT", "Mode", nullptr); extra("FILTER", "fSl", "Slope", nullptr); extra("FILTER", "fCar", "Character", nullptr);
     extra("LFO 1", "l1S", "Shape", nullptr); extra("LFO 1", "l1Y", "Sync", nullptr); extra("LFO 2", "l2S", "Shape", nullptr); extra("LFO 2", "l2Y", "Sync", nullptr);
     extra("GLOBAL", "leg", "Mode", "Legato"); extra("SATURATION", "sMode", "Mode", nullptr); extra("TUBE PREAMP", "tOn", "Insert", "Active");
-    extra("PUMP", "pY", "Sync", nullptr); extra("ECHO", "dY", "Time", nullptr); extra("ECHO", "dPP", "Mode", "Ping-pong");
+    extra("PUMP", "pY", "Sync", nullptr); extra("ECHO", "dY", "Time", nullptr); extra("ECHO", "dMode", "Mode", nullptr);
+    { auto& ec = cell(sec("ECHO"), "Presets"); ec.c = std::make_unique<ComboBox>(); auto* box = ec.c.get(); box->setTextWhenNothingSelected("Presets...");
+      for (size_t i = 0; i < kEchoPre.size(); ++i) box->addItem(kEchoPre[i].n, (int) i + 1);
+      box->onChange = [this, box] { int i = box->getSelectedId() - 1; if (i < 0) return;
+        for (auto& kv : kEchoPre[(size_t) i].v) if (auto* q = pr.apvts.getParameter(kv.first)) { q->beginChangeGesture(); q->setValueNotifyingHost(q->convertTo0to1(kv.second)); q->endChangeGesture(); } };
+      addAndMakeVisible(*box); }
     sec("OUTPUT").extraW = 3 * CW; sec("TUBE PREAMP").extraW = 3 * CW + 6; sec("EQ").extraW = EQW + 14 + 270;
     for (auto* id : ids) pr.apvts.addParameterListener(id, this);
     refreshPresets();
@@ -754,13 +849,16 @@ public:
       if (e.factory >= 0) pr.setCurrentProgram(e.factory); else pr.loadUser(e.file); };
     auto step = [this](int dlt) { int n = (int) entries.size(), id = pre.getSelectedId(); if (n > 0) pre.setSelectedId(((id - 1 + dlt + n) % n) + 1, sendNotificationSync); };
     prev.onClick = [step] { step(-1); }; next.onClick = [step] { step(1); };
+    magicType.addItemList(StringArray{"Any", "Bass", "Lead", "Pluck", "Pad", "Kick", "Perc"}, 1); magicType.setSelectedId(1, dontSendNotification);
+    magicBtn.setColour(TextButton::buttonColourId, Colour(0xff3a2514)); magicBtn.setColour(TextButton::textColourOffId, Colour(0xffff9a3c));
+    magicBtn.onClick = [this] { pr.magic(magicType.getSelectedId() - 1); refreshPresets(); };
     save.onClick = [this] {
       auto* aw = new AlertWindow("Save preset", "Preset name:", MessageBoxIconType::NoIcon);
       aw->addTextEditor("name", pr.currentName()); aw->addButton("Save", 1, KeyPress(KeyPress::returnKey)); aw->addButton("Cancel", 0, KeyPress(KeyPress::escapeKey));
       auto* cb = new SaveCb(); Component::SafePointer<Panel> ed(this); Component::SafePointer<AlertWindow> sp(aw);
       cb->f = [ed, sp](int r) { if (r == 1 && ed != nullptr && sp != nullptr) { auto n = sp->getTextEditorContents("name").trim(); if (n.isNotEmpty()) { ed->pr.saveUser(n); ed->refreshPresets(); } } };
       aw->enterModalState(true, cb, true); };
-    addAndMakeVisible(pre); addAndMakeVisible(prev); addAndMakeVisible(next); addAndMakeVisible(save);
+    addAndMakeVisible(pre); addAndMakeVisible(prev); addAndMakeVisible(next); addAndMakeVisible(save); addAndMakeVisible(magicBtn); addAndMakeVisible(magicType);
     screen = std::make_unique<ScreenView>(pr, last, ids); addAndMakeVisible(*screen);
     tube = std::make_unique<TubeView>(pr); addAndMakeVisible(*tube); meter = std::make_unique<MeterView>(pr); addAndMakeVisible(*meter);
     eqd = std::make_unique<EqDisplay>(pr); eqd->onSelect = [this](int b) { selectBand(b); }; addAndMakeVisible(*eqd);
@@ -774,26 +872,27 @@ public:
   ~Panel() override { stopTimer(); for (auto* id : ids) pr.apvts.removeParameterListener(id, this); setLookAndFeel(nullptr); }
   void paint(Graphics& g) override {
     g.drawImageAt(bg, 0, 0);
-    g.drawImageWithin(logo, CHEEK + 44, 20, 92, 92, RectanglePlacement::centred);
-    g.setFont(27.f); g.setColour(Colours::black.withAlpha(.75f)); g.drawText("OKTOPLUS SYNTH", 172, 33, 250, 34, Justification::left);
-    g.setColour(Colour(0xfff0f2f4)); g.drawText("OKTOPLUS SYNTH", 172, 31, 250, 34, Justification::left);
-    led(g, 184.f, 92.f, Colour(0xff58b4ff), true); led(g, 262.f, 92.f, Colour(0xff5cff8a), voiceLit);
-    g.setFont(11.f); g.setColour(Colour(0xffc9ced3)); g.drawText("POWER", 194, 84, 60, 16, Justification::left); g.drawText("VOICE", 272, 84, 50, 16, Justification::left);
-    g.setColour(Colour(0xaa000000)); g.drawHorizontalLine(134, (float) CHEEK + 10.f, (float) getWidth() - CHEEK - 10.f);
-    g.setColour(Colour(0x44ffffff)); g.drawHorizontalLine(135, (float) CHEEK + 10.f, (float) getWidth() - CHEEK - 10.f);
-    for (auto& s : secs) { auto a = s->area.toFloat(); if (a.isEmpty()) continue; auto col = secColor(s->title);
-      g.setColour(Colour(0x1c000000)); g.fillRoundedRectangle(a, 6.f);
-      g.setColour(Colour(0xaa000000)); g.drawRoundedRectangle(a, 6.f, 1.2f); g.setColour(Colour(0x30ffffff)); g.drawRoundedRectangle(a.translated(0.f, 1.2f), 6.f, 1.f);
-      g.setColour(Colour(0xfff0f2f4)); g.setFont(13.f); g.drawText(s->title, s->area.getX() + 10, s->area.getY() + 3, s->area.getWidth() - 16, 18, Justification::left);
-      g.setColour(col); g.fillRect(s->area.getX() + 8, s->area.getY() + 22, s->area.getWidth() - 16, 2); } }
+    g.drawImageWithin(logo, 44, 20 + TB, 92, 92, RectanglePlacement::centred);
+    g.setFont(27.f); g.setColour(Colours::black.withAlpha(.75f)); g.drawText("OKTOPLUS SYNTH", 172, 33 + TB, 250, 34, Justification::left);
+    g.setColour(Colour(0xfff0f2f4)); g.drawText("OKTOPLUS SYNTH", 172, 31 + TB, 250, 34, Justification::left);
+    led(g, 184.f, 92.f + TB, Colour(0xffff8a2a), true); led(g, 262.f, 92.f + TB, Colour(0xff5cff8a), voiceLit);
+    g.setFont(11.f); g.setColour(Colour(0xffc9ced3)); g.drawText("POWER", 194, 84 + TB, 60, 16, Justification::left); g.drawText("VOICE", 272, 84 + TB, 50, 16, Justification::left);
+    g.setColour(Colour(0x66ffffff)); g.drawHorizontalLine(134 + TB, (float) MX, (float) getWidth() - MX);
+    for (auto& s : secs) { auto a = s->area; if (a.isEmpty()) continue; auto col = secColor(s->title);        // thin silkscreen outline, title sitting on the top line
+      int x = a.getX(), y = a.getY() + 8, r = a.getRight(), bt = a.getBottom(), tw = (int) ((float) s->title.length() * 7.7f) + 34;
+      g.setColour(Colour(0x80ffffff)); g.drawHorizontalLine(y, (float) x, (float) x + 8.f); g.drawHorizontalLine(y, (float) (x + tw), (float) r);
+      g.drawVerticalLine(x, (float) y, (float) bt); g.drawVerticalLine(r, (float) y, (float) bt); g.drawHorizontalLine(bt, (float) x, (float) r);
+      g.setColour(col); g.fillRect((float) x + 14.f, (float) y - 3.f, 6.f, 6.f);
+      g.setColour(Colour(0xffdfe4e8)); g.setFont(12.5f); g.drawText(s->title, x + 24, y - 8, tw, 16, Justification::left); } }
   void resized() override {
     bg = Image(Image::RGB, getWidth(), getHeight(), true); { Graphics g(bg); background(g, getWidth(), getHeight()); }
-    screen->setBounds(520, 12, 560, 104);
-    prev.setBounds(1130, 34, 30, 28); pre.setBounds(1164, 34, 260, 28); next.setBounds(1428, 34, 30, 28); save.setBounds(1130, 70, 110, 28);
+    screen->setBounds(520, 12 + TB, 560, 104);
+    prev.setBounds(1130, 34 + TB, 30, 28); pre.setBounds(1164, 34 + TB, 260, 28); next.setBounds(1428, 34 + TB, 30, 28);
+    save.setBounds(1130, 72 + TB, 100, 28); magicBtn.setBounds(1238, 72 + TB, 110, 28); magicType.setBounds(1356, 72 + TB, 102, 28);
     static const char* rows[6][4] = {{"OSC A (ADDITIVE)", "OSC B (GRANULAR)", "NOISE", nullptr}, {"FILTER", "FILTER ENV", "AMP ENV", nullptr}, {"LFO 1", "LFO 2", "GLOBAL", "OUTPUT"},
                                      {"SATURATION", "TUBE PREAMP", "PUMP", nullptr}, {"EQ", nullptr, nullptr, nullptr}, {"ECHO", "REVERB", nullptr, nullptr}};
-    int y = 142;
-    for (int r = 0; r < 6; ++r) { int x = CHEEK + 14, rh = (r == 4) ? 28 + EQH + 8 : 28 + CH + 8;
+    int y = 142 + TB;
+    for (int r = 0; r < 6; ++r) { int x = MX, rh = (r == 4) ? 28 + EQH + 8 : 28 + CH + 8;
       for (int k = 0; k < 4 && rows[r][k]; ++k) { auto& s = sec(rows[r][k]); int n = (int) s.cells.size(); s.area = {x, y, n * CW + s.extraW + 12, rh};
         for (int i = 0; i < n; ++i) { auto& c = *s.cells[(size_t) i]; int bx = x + 6 + i * CW, by = y + 28;
           c.l.setBounds(bx, by, CW, 16);
@@ -805,7 +904,7 @@ public:
           for (int i = 0; i < 6; ++i) bandBtn[i].setBounds(px + i * 44, y + 30, 40, 26);
           lF.setBounds(px, y + 62, CW, 16); lG.setBounds(px + CW, y + 62, CW, 16); lQ.setBounds(px + 2 * CW, y + 62, CW, 16);
           kF.setBounds(px, y + 78, CW, CH - 16); kG.setBounds(px + CW, y + 78, CW, CH - 16); kQ.setBounds(px + 2 * CW, y + 78, CW, CH - 16);
-          bType.setBounds(px + 4, y + 184, 150, 26); bOn.setBounds(px + 160, y + 184, 100, 26); eqAct.setBounds(px + 4, y + 216, 150, 26); }
+          bType.setBounds(px + 4, y + 190, 150, 26); bOn.setBounds(px + 160, y + 190, 100, 26); eqAct.setBounds(px + 4, y + 222, 150, 26); }
         x += n * CW + s.extraW + 12 + 22; }
       y += rh + 8; } }
 };
@@ -816,7 +915,7 @@ public:
   Editor(Proc& p) : AudioProcessorEditor(&p), panel(p) {
     addAndMakeVisible(panel); setResizable(true, true);
     setResizeLimits(640, (int) (640.0 * Panel::H / Panel::W), 2200, (int) (2200.0 * Panel::H / Panel::W)); getConstrainer()->setFixedAspectRatio((double) Panel::W / (double) Panel::H);
-    setSize((int) (Panel::W * .8), (int) (Panel::H * .8)); }
+    setSize((int) (Panel::W * .75), (int) (Panel::H * .75)); }
   void resized() override { panel.setBounds(0, 0, Panel::W, Panel::H); panel.setTransform(AffineTransform::scale((float) getWidth() / (float) Panel::W)); }
 };
 

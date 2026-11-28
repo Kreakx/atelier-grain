@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(AtelierGrain VERSION 0.5.0)
+project(AtelierGrain VERSION 0.6.0)
 include(FetchContent)
 FetchContent_Declare(JUCE GIT_REPOSITORY https://github.com/juce-framework/JUCE.git GIT_TAG 8.0.4 GIT_SHALLOW ON)
 FetchContent_MakeAvailable(JUCE)
-juce_add_binary_data(AtelierAssets SOURCES Assets/logo.png)
+juce_add_binary_data(AtelierAssets SOURCES Assets/logo.png Assets/knob_small.png Assets/knob_large.png Assets/wood_top.jpg Assets/wood_bottom.jpg Assets/chassis.jpg)
 set_target_properties(AtelierAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 juce_add_plugin(AtelierGrain
   COMPANY_NAME "Oktoplus" IS_SYNTH TRUE NEEDS_MIDI_INPUT TRUE
